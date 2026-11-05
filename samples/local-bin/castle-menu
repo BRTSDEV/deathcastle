@@ -1,0 +1,853 @@
+#!/usr/bin/env python3
+# Castle menu, opened from the tower on Waybar: night mode, sound, network, power.
+#
+# Night mode: while you drag, a background thread sends the newest values straight to
+# Hyprland's socket (about 2ms each), so the slider never waits on anything.
+# Once you stop, ~/.local/bin/nightmode saves them and updates the bar.
+# Sound: volume of the default output (wpctl, newest value only while dragging),
+# mute, and which output is the default (pactl). Network: wired/wifi status, no IP.
+# Power: lock and sleep act at once; log out, reboot and shut down want a second
+# click within a few seconds. Those three close apps cleanly through hyprshutdown.
+# Escape or clicking somewhere else closes the menu (not while slurp/grim are taking
+# a screenshot). P saves a 2x screenshot of the menu itself, transparent around the
+# battlements, to ~/Pictures/Screenshots and copies it to the clipboard.
+import datetime
+import math
+import random
+import os
+import socket
+import subprocess
+import threading
+import json
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Graphene
+import cairo
+
+HOME = os.path.expanduser("~")
+TOOL = f"{HOME}/.local/bin/nightmode"
+STATE = os.environ.get("XDG_STATE_HOME", f"{HOME}/.local/state") + "/nightmode"
+TEMPLATE = os.environ.get("XDG_DATA_HOME", f"{HOME}/.local/share") + "/nightmode/shader.frag.in"
+COLORS = f"{HOME}/.config/waybar/colors.css"  # the DEATHCASTLE palette, generated
+SOCKET = f"{os.environ.get('XDG_RUNTIME_DIR')}/hypr/{os.environ.get('HYPRLAND_INSTANCE_SIGNATURE')}/.socket.sock"
+
+T_MIN, T_MAX, B_MIN = 1000, 6500, 20
+NEUTRAL = (6500, 100)  # what "no night mode" looks like, for fading in and out
+PRESETS = [("EMBER", 1900, 60), ("TORCH", 2700, 75), ("LANTERN", 3400, 85), ("DUSK", 4500, 100)]
+SAVE_AFTER_MS = 300    # save and update the bar this long after the last change
+FADE_MS = 280
+SUNRISE, SUNSET = 7, 19  # hours: the sun is up between these, the moon the rest
+CONFIRM_SECS = 3
+SHOT_DIR = f"{HOME}/Pictures/Screenshots"
+SHOT_SCALE = 2
+
+
+def sh(*args):
+    """Run a command, return its stdout ('' on any failure)."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def volume():
+    """(percent, muted) of the default output."""
+    out = sh("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@").split()  # "Volume: 0.40 [MUTED]"
+    try:
+        return round(float(out[1]) * 100), "[MUTED]" in out
+    except (IndexError, ValueError):
+        return 0, False
+
+
+def outputs():
+    """[(name, short label, is_default, kind)] for every audio output."""
+    try:
+        sinks = json.loads(sh("pactl", "-f", "json", "list", "sinks") or "[]")
+    except ValueError:
+        sinks = []
+    default = sh("pactl", "get-default-sink").strip()
+    def kind(x):
+        props = x.get("properties", {})
+        if props.get("device.form_factor") in ("headset", "headphone") or "headset" in x["name"].lower():
+            return "headset"
+        return "monitor" if "hdmi" in x["name"].lower() or "displayport" in x["name"].lower() else "speaker"
+    return [(x["name"], (x["properties"].get("node.nick") or x["description"])[:13], x["name"] == default, kind(x))
+            for x in sinks]
+
+
+def network():
+    """(kind, text) for the interface with the default route; kind is wired, wifi or down. Never the IP."""
+    dev = ""
+    for line in sh("ip", "-4", "route", "show", "default").splitlines():
+        parts = line.split()
+        if "dev" in parts:
+            dev = parts[parts.index("dev") + 1]
+            break
+    if not dev:
+        return "down", "OFFLINE"
+    if os.path.exists(f"/sys/class/net/{dev}/wireless"):
+        ssid = sh("iw", "dev", dev, "link")
+        ssid = next((l.split(":", 1)[1].strip() for l in ssid.splitlines() if "SSID" in l), "")
+        return "wifi", ssid[:16].upper() if ssid else "WIFI"
+    try:
+        speed = int(open(f"/sys/class/net/{dev}/speed").read())
+        return "wired", f"WIRED · {speed // 1000} Gb/s" if speed >= 1000 else f"WIRED · {speed} Mb/s"
+    except (OSError, ValueError):
+        return "wired", "WIRED"
+
+
+def shutdown_then(label, cmd, fallback=None):
+    """Close every app cleanly, leave Hyprland, then run cmd.
+    Without hyprshutdown it runs fallback, or cmd itself."""
+    return (f"if command -v hyprshutdown >/dev/null; then hyprshutdown -t '{label}' -p '{cmd}'; "
+            f"else {fallback or cmd}; fi")
+
+
+POWER = [  # icon, name, what the confirm hint says, shell command, needs a second click
+    ("\U000f033e", "LOCK",   "lock",      "loginctl lock-session", False),
+    ("\U000f0904", "SLEEP",  "sleep",     "loginctl suspend", False),  # hypridle locks before sleeping
+    ("\U000f0343", "EXIT",   "log out",   shutdown_then("Logging out...", "true", "hyprctl dispatch 'hl.dsp.exit()'"), True),
+    ("\U000f0709", "REBOOT", "reboot",    shutdown_then("Rebooting...", "loginctl reboot"), True),
+    ("\U000f0425", "OFF",    "shut down", shutdown_then("Shutting down...", "loginctl poweroff"), True),
+]
+
+GLYPH = {  # Symbols Nerd Font, Material Design set
+    "tower": "\uf286", "night": "\U000f0594", "sound": "\U000f057e", "muted": "\U000f0581",
+    "wired": "\U000f0200", "wifi": "\U000f05a9", "down": "\U000f0319", "power": "\U000f0425",
+    "headset": "\U000f02cb", "monitor": "\U000f0379", "speaker": "\U000f04c3",
+}
+
+
+def kelvin(k):
+    """Same blackbody fit as the shader, as 0..1 floats, for drawing the UI."""
+    t = k / 100
+    r = 255 if t <= 66 else 329.698727446 * (t - 60) ** -0.1332047592
+    g = 99.4708025861 * math.log(t) - 161.1195681661 if t <= 66 else 288.1221695283 * (t - 60) ** -0.0755148492
+    b = 255 if t >= 66 else (0 if t <= 19 else 138.5177312231 * math.log(t - 10) - 305.0447927307)
+    return tuple(min(max(c / 255, 0), 1) for c in (r, g, b))
+
+
+def css_rgb(rgb):
+    return "rgb({},{},{})".format(*(round(c * 255) for c in rgb))
+
+
+def palette():
+    """The @define-color lines of the generated Waybar colours, as 0..1 RGB tuples."""
+    out = {"bg": "#11161c", "surface": "#232a31", "muted": "#7e929d", "fg": "#d5dee6",
+           "accent": "#a9c1cf", "amber": "#e0b060"}
+    try:
+        for line in open(COLORS):
+            parts = line.split()
+            if len(parts) == 3 and parts[0] == "@define-color":
+                out[parts[1]] = parts[2].rstrip(";")
+    except OSError:
+        pass
+    return {k: tuple(int(v[i:i + 2], 16) / 255 for i in (1, 3, 5)) for k, v in out.items()}
+
+
+PAL = palette()
+
+
+def battlements(_area, cr, w, h):
+    """A wall top across the popup: merlons standing on a solid course."""
+    cr.set_antialias(cairo.Antialias.NONE)
+    cr.set_source_rgb(*PAL["accent"])
+    cr.rectangle(0, h - 4, w, 4)
+    merlon, gap = 14, 10
+    count = (w + gap) // (merlon + gap)
+    x = (w - (count * merlon + (count - 1) * gap)) // 2  # centred, same at both ends
+    for _ in range(count):
+        cr.rectangle(x, 0, merlon, h)
+        x += merlon + gap
+    cr.fill()
+
+
+def merlons(cr, x, top, width, size=5, gap=3):
+    n = max((width + gap) // (size + gap), 1)
+    x0 = x + (width - (n * size + (n - 1) * gap)) // 2
+    for i in range(n):
+        cr.rectangle(x0 + i * (size + gap), top - size, size, size)
+
+
+def sky_clock(now=None):
+    """Where we are in the day: (is_day, 0..1 across the sky from rise to set)."""
+    now = now or datetime.datetime.now()
+    hour = now.hour + now.minute / 60
+    day_len = SUNSET - SUNRISE
+    if SUNRISE <= hour < SUNSET:
+        return True, (hour - SUNRISE) / day_len
+    return False, ((hour - SUNSET) % 24) / (24 - day_len)
+
+
+def skyline(cr, w, h, lit, now=None):
+    """The sky with the sun or moon on its arc, a castle in front, windows lit by the tint (None = dark)."""
+    is_day, p = sky_clock(now)
+    sky = PAL["bg"]
+    if is_day:  # a lighter slate by day, never bright enough to fight the night mode
+        sky = tuple(b + (a - b) * 0.22 for a, b in zip(PAL["accent"], PAL["bg"]))
+    cr.set_antialias(cairo.Antialias.NONE)
+    cr.set_source_rgb(*sky)
+    cr.paint()
+
+    if not is_day:
+        stars = random.Random(7)  # same sky every time
+        cr.set_source_rgb(*PAL["muted"])
+        for _ in range(w // 9):
+            cr.rectangle(stars.randrange(w), stars.randrange(h - 20), 1, 1)
+        cr.fill()
+
+    # rises on the left, highest at midday/midnight, sets on the right behind the wall
+    horizon, top = h - 12, 10
+    x = int(10 + p * (w - 20))
+    y = int(horizon - math.sin(math.pi * p) * (horizon - top))
+    if is_day:
+        cr.set_source_rgb(*PAL["amber"])
+        for i in range(8):  # pixel rays
+            a = i * math.pi / 4
+            cr.rectangle(int(x + math.cos(a) * 9) - 1, int(y + math.sin(a) * 9) - 1, 2, 2)
+        cr.fill()
+        cr.set_antialias(cairo.Antialias.DEFAULT)
+        cr.arc(x, y, 5, 0, 2 * math.pi)
+        cr.fill()
+    else:  # crescent: a pale disc with a sky-coloured bite
+        cr.set_antialias(cairo.Antialias.DEFAULT)
+        cr.set_source_rgb(*PAL["accent"])
+        cr.arc(x, y, 7, 0, 2 * math.pi)
+        cr.fill()
+        cr.set_source_rgb(*sky)
+        cr.arc(x + 4, y - 2, 6, 0, 2 * math.pi)
+        cr.fill()
+    cr.set_antialias(cairo.Antialias.NONE)
+
+    tl, keep, turret, tr = 14, w // 2 - 24, int(w * 0.30), w - 40
+    o = h - 48  # the castle stands on the ground; everything above it is sky
+    blocks = [  # x, top, width
+        (0, h - 14, w),       # curtain wall
+        (tl, o + 14, 24),     # left tower
+        (turret, o + 24, 14), # turret
+        (keep, o + 6, 48),    # keep
+        (tr, o + 18, 24),     # right tower
+    ]
+    cr.set_source_rgb(*PAL["surface"])
+    for x, top, width in blocks:
+        cr.rectangle(x, top, width, h - top)
+        merlons(cr, x, top, width, size=4 if width < 20 else 5)
+    cr.fill()
+
+    windows = [(tl + 9, o + 22, 6, 8), (turret + 5, o + 30, 4, 6), (keep + 9, o + 14, 6, 8), (keep + 33, o + 14, 6, 8),
+               (keep + 21, o + 26, 6, 9), (tr + 9, o + 26, 6, 8), (int(w * 0.18), h - 9, 3, 5), (int(w * 0.83), h - 9, 3, 5)]
+    if lit:
+        cr.set_source_rgba(*lit, 0.22)  # faint glow on the stone
+        for x, y, ww, hh in windows:
+            cr.rectangle(x - 2, y - 2, ww + 4, hh + 4)
+        cr.fill()
+    cr.set_source_rgb(*(lit or PAL["bg"]))
+    for x, y, ww, hh in windows:
+        cr.rectangle(x, y, ww, hh)
+    cr.fill()
+
+    cr.set_source_rgb(*PAL["bg"])  # gate
+    cr.rectangle(keep + 19, h - 12, 10, 12)
+    cr.fill()
+
+
+def read_num(name, default):
+    try:
+        return int(open(f"{STATE}/{name}").read().strip())
+    except (OSError, ValueError):
+        return default
+
+
+class Live(threading.Thread):
+    """Pushes the newest (temp, bright) to Hyprland; older ones are dropped, never queued."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.template = open(TEMPLATE).read()
+        self.cond = threading.Condition()
+        self.want = None
+        self.flip = False
+
+    def push(self, temp, bright):
+        with self.cond:
+            self.want = (temp, bright)
+            self.cond.notify()
+
+    def run(self):
+        while True:
+            with self.cond:
+                while self.want is None:
+                    self.cond.wait()
+                temp, bright = self.want
+                self.want = None
+            # Hyprland may skip a path it already has, so flip between two files.
+            self.flip = not self.flip
+            path = f"{STATE}/menu-{'a' if self.flip else 'b'}.frag"  # not the files nightmode uses
+            with open(path, "w") as f:
+                f.write(self.template.replace("@TEMP@", str(temp)).replace("@BRIGHT@", str(bright)))
+            try:
+                with socket.socket(socket.AF_UNIX) as s:
+                    s.connect(SOCKET)
+                    s.sendall(f'eval hl.config({{ decoration = {{ screen_shader = "{path}" }} }})'.encode())
+                    s.recv(64)
+            except OSError:
+                pass
+
+
+class Latest(threading.Thread):
+    """Runs fn with the newest value given to push(); values that pile up are skipped."""
+
+    def __init__(self, fn):
+        super().__init__(daemon=True)
+        self.fn = fn
+        self.cond = threading.Condition()
+        self.want = None
+
+    def push(self, value):
+        with self.cond:
+            self.want = value
+            self.cond.notify()
+
+    def run(self):
+        while True:
+            with self.cond:
+                while self.want is None:
+                    self.cond.wait()
+                value, self.want = self.want, None
+            self.fn(value)
+
+
+CSS = """
+/* ---- frame ------------------------------------------------------------
+   The window is see-through so the gaps between the merlons show what is
+   behind it. .keep is the solid part, walled on three sides; the
+   battlements drawn above it are its top edge. Spacing is on a 4px grid. */
+window { background: transparent; color: @fg; }
+.keep { background: @bg; border: 2px solid @accent; border-top: none; }
+* {
+    font-family: "JetBrains Mono"; font-weight: bold; font-size: 11px;
+    border-radius: 0; outline: none; box-shadow: none; text-shadow: none; -gtk-icon-shadow: none;
+}
+
+/* ---- type ------------------------------------------------------------ */
+.glyph   { font-family: "Symbols Nerd Font Mono"; font-weight: normal; font-size: 13px; min-width: 16px; }
+.title   { font-size: 12px; letter-spacing: 1.5px; color: @fg; }
+.clock   { font-size: 11px; color: @muted; }
+.section { font-size: 10px; letter-spacing: 1px; color: @accent; }
+.section-glyph { color: @accent; }
+.sub     { font-size: 10px; letter-spacing: 0.5px; color: @muted; }
+.value   { font-size: 11px; color: @amber; }
+.hint    { font-size: 10px; letter-spacing: 1px; color: @amber; }
+.tower   { color: @amber; font-size: 15px; }
+
+/* ---- structure ------------------------------------------------------- */
+.head    { padding: 10px 12px 10px 12px; }
+.sky     { border-top: 2px solid @surface; border-bottom: 2px solid @surface; }
+.part    { padding: 12px 12px 12px 12px; }
+.stone   { background: @surface; min-height: 2px; }
+
+/* off / muted sections: the controls stay usable, they just step back */
+.resting .controls { opacity: 0.45; transition: opacity 200ms; }
+.controls { transition: opacity 200ms; }
+.resting .value { color: @muted; }
+
+/* ---- sliders --------------------------------------------------------- */
+scale { padding: 6px 0 2px 0; min-height: 0; }
+scale trough { min-height: 6px; background: @surface; border: none; }
+scale highlight { background: transparent; border: none; min-height: 6px; min-width: 0; margin: 0; padding: 0; }
+scale slider {
+    min-width: 8px; min-height: 18px; margin: -6px 0;
+    background: @fg; border: 2px solid @bg;
+    transition: background 120ms;
+}
+scale:hover slider { background: @accent; }
+scale slider:active, scale:focus-visible slider { background: @amber; }
+.bright trough { background-image: linear-gradient(to right, mix(@bg, @fg, 0.15), @fg); }
+.vol highlight { background: @accent; }
+.resting .vol highlight { background: @muted; }
+
+/* ---- buttons --------------------------------------------------------- */
+button {
+    background: @surface; color: @fg; min-height: 0; padding: 5px 0;
+    border: 2px solid @surface; font-size: 10px; letter-spacing: 0.5px;
+    transition: border-color 120ms, color 120ms, background 120ms;
+}
+button:hover { border-color: @accent; }
+button:active { background: @bg; }
+button:focus-visible { border-color: @accent; }
+button.active { border-color: @amber; color: @amber; }
+button .glyph { font-size: 12px; min-width: 0; }
+
+.power button { padding: 7px 0 5px 0; }
+.power .glyph { font-size: 16px; }
+.power .name  { font-size: 9px; letter-spacing: 1px; }
+.power button.danger:hover { border-color: @amber; color: @amber; }
+.power button.armed { background: @amber; border-color: @amber; color: @bg; animation: armed 900ms ease-in-out infinite alternate; }
+@keyframes armed { from { background: @amber; } to { background: mix(@amber, @bg, 0.35); } }
+
+/* ---- switches -------------------------------------------------------- */
+switch {
+    background: @surface; border: 2px solid @surface; min-width: 28px; min-height: 12px;
+    transition: background 150ms, border-color 150ms;
+}
+switch:hover { border-color: @accent; }
+switch:checked { background: @amber; border-color: @amber; }
+switch slider { background: @muted; border: none; min-width: 12px; min-height: 12px; margin: 0; transition: background 150ms; }
+switch:checked slider { background: @fg; }
+switch image { opacity: 0; }
+
+/* ---- status ---------------------------------------------------------- */
+.net-up   { color: @fg; }
+.net-down { color: @amber; }
+
+tooltip { background: @bg; border: 2px solid @accent; }
+tooltip label { color: @fg; font-size: 10px; padding: 2px 4px; }
+"""
+
+
+def label(text="", *classes, xalign=0.0, hexpand=False):
+    w = Gtk.Label(label=text, xalign=xalign, hexpand=hexpand)
+    for c in classes:
+        w.add_css_class(c)
+    return w
+
+
+def glyph(name, *classes):
+    return label(GLYPH[name], "glyph", *classes, xalign=0.5)
+
+
+def hbox(*children, spacing=0, cls=None):
+    b = Gtk.Box(spacing=spacing)
+    for c in children:
+        b.append(c)
+    if cls:
+        b.add_css_class(cls)
+    return b
+
+
+def vbox(*children, spacing=0, cls=None):
+    b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=spacing)
+    for c in children:
+        b.append(c)
+    if cls:
+        b.add_css_class(cls)
+    return b
+
+
+def section_head(icon, name, right):
+    """One header style for every section: glyph, tracked name, control on the right."""
+    return hbox(glyph(icon, "section-glyph"), label(name, "section", hexpand=True), right, spacing=6)
+
+
+class Menu(Gtk.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Castle")
+        self.set_default_size(300, -1)
+        self.set_resizable(False)
+        self.live = Live()
+        self.live.start()
+        self.save_timer = None
+        self.anim = None
+        self.quiet = False      # set while code (not you) moves the controls
+        self.vol_quiet = False
+        self.vol_touched = 0    # when you last moved the volume; live polling waits for you
+        self.armed = None
+
+        self.is_on = os.path.exists(f"{STATE}/on")
+        self.temp_v = read_num("temp", 3400)
+        self.bright_v = read_num("bright", 85)
+
+        wall = Gtk.DrawingArea(content_height=12)
+        wall.set_draw_func(battlements)
+
+        self.lit = None
+        self.preview = Gtk.DrawingArea(content_height=64)
+        self.preview.set_draw_func(lambda _a, cr, w, h: skyline(cr, w, h, self.lit))
+        self.preview.add_css_class("sky")
+
+        self.clock = label("", "clock")
+        head = hbox(label(GLYPH["tower"], "glyph", "tower"), label("DEATHCASTLE", "title", hexpand=True),
+                    self.clock, spacing=8, cls="head")
+
+        keep = vbox(head, self.preview,
+                    self.night_section(), self.stone(),
+                    self.sound_section(), self.stone(),
+                    self.network_section(), self.stone(),
+                    self.power_section(), cls="keep")
+        self.set_child(vbox(wall, keep))
+
+        self.refresh()
+        self.tick()
+        GLib.timeout_add_seconds(1, self.poll_sound)
+        GLib.timeout_add_seconds(5, self.poll_network)
+        GLib.timeout_add_seconds(20, self.tick)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self.on_key)
+        self.add_controller(keys)
+        self.connect("notify::is-active", self.on_focus)
+        self.connect("close-request", self.on_close)
+
+    def stone(self):
+        return hbox(cls="stone")
+
+    def tick(self):
+        """Clock in the header and the sun/moon in the sky."""
+        self.clock.set_label(datetime.datetime.now().strftime("%a %H:%M").upper())
+        self.preview.queue_draw()
+        return True
+
+    def slider(self, name, lo, hi, step, value, on_change, *classes):
+        val = label("", "value", xalign=1)
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+        scale.set_draw_value(False)
+        scale.set_round_digits(0)
+        scale.set_increments(step, step * 5)
+        scale.set_value(value)
+        for c in classes:
+            scale.add_css_class(c)
+        scale.connect("value-changed", on_change)
+        return vbox(hbox(label(name, "sub", hexpand=True), val), scale), val, scale
+
+    # ---- night mode ----------------------------------------------------
+
+    def night_section(self):
+        self.switch = Gtk.Switch(active=self.is_on, valign=Gtk.Align.CENTER)
+        self.switch.set_tooltip_text("night mode on/off")
+        self.switch.connect("notify::active", self.on_switch)
+
+        warm, self.temp_val, self.temp = self.slider("WARMTH", T_MIN, T_MAX, 50, self.temp_v, self.on_slide, "warm")
+        self.temp.set_inverted(True)  # right = warmer
+        bright, self.bright_val, self.bright = self.slider("BRIGHTNESS", B_MIN, 100, 1, self.bright_v,
+                                                          self.on_slide, "bright")
+        presets = Gtk.Box(spacing=4, homogeneous=True)
+        self.preset_btns = []
+        for name, t, b in PRESETS:
+            btn = Gtk.Button(label=name)
+            btn.set_tooltip_text(f"{t}K · {b}%")
+            btn.connect("clicked", lambda _b, t=t, b=b: self.go_to(t, b))
+            presets.append(btn)
+            self.preset_btns.append((btn, t, b))
+
+        self.night = vbox(section_head("night", "NIGHT MODE", self.switch),
+                          vbox(warm, bright, presets, spacing=8, cls="controls"),
+                          spacing=10, cls="part")
+        return self.night
+
+    # ---- sound ---------------------------------------------------------
+
+    def sound_section(self):
+        self.vol_push = Latest(lambda v: sh("wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{v / 100:.2f}"))
+        self.vol_push.start()
+
+        self.sound_switch = Gtk.Switch(valign=Gtk.Align.CENTER)  # on = sound, off = muted
+        self.sound_switch.set_tooltip_text("mute")
+        self.sound_switch.connect("notify::active", self.on_mute)
+        self.sound_glyph = glyph("sound", "section-glyph")
+
+        vol, self.vol_val, self.vol = self.slider("VOLUME", 0, 100, 1, 0, self.on_volume, "vol")
+        self.out_row = Gtk.Box(spacing=4, homogeneous=True)
+
+        head = hbox(self.sound_glyph, label("SOUND", "section", hexpand=True), self.sound_switch, spacing=6)
+        self.sound = vbox(head, vbox(vol, self.out_row, spacing=8, cls="controls"), spacing=10, cls="part")
+        self.out_key = None
+        self.read_sound()
+        return self.sound
+
+    def read_sound(self):
+        """Pull volume, mute and outputs from PipeWire into the controls."""
+        v, muted = volume()
+        self.vol_quiet = True
+        if int(self.vol.get_value()) != v:
+            self.vol.set_value(v)
+        if self.sound_switch.get_active() == muted:
+            self.sound_switch.set_active(not muted)
+        self.vol_quiet = False
+        self.muted = muted
+        self.show_sound()
+
+        outs = outputs()
+        key = tuple((n, d) for n, _s, d, _k in outs)
+        if key == self.out_key:  # nothing changed, keep the buttons (and their hover) as they are
+            return
+        self.out_key = key
+        while (c := self.out_row.get_first_child()):
+            self.out_row.remove(c)
+        for name, short, is_default, kind in outs:
+            btn = Gtk.Button()
+            btn.set_child(hbox(glyph(kind), label(short.upper()), spacing=6))
+            btn.get_child().set_halign(Gtk.Align.CENTER)
+            btn.set_tooltip_text(f"play sound on {short}")
+            if is_default:
+                btn.add_css_class("active")
+            btn.connect("clicked", self.on_output, name)
+            self.out_row.append(btn)
+        self.out_row.set_visible(len(outs) > 1)
+
+    def show_sound(self):
+        self.vol_val.set_label("MUTED" if self.muted else f"{int(self.vol.get_value())}%")
+        self.sound_glyph.set_label(GLYPH["muted" if self.muted else "sound"])
+        (self.sound.add_css_class if self.muted else self.sound.remove_css_class)("resting")
+
+    def on_volume(self, _scale):
+        if self.vol_quiet:
+            return
+        self.vol_touched = GLib.get_monotonic_time()
+        self.vol_push.push(int(self.vol.get_value()))
+        self.show_sound()
+
+    def on_mute(self, sw, _p):
+        if self.vol_quiet:
+            return
+        sh("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "0" if sw.get_active() else "1")
+        self.muted = not sw.get_active()
+        self.show_sound()
+
+    def on_output(self, _btn, name):
+        sh("pactl", "set-default-sink", name)
+        self.read_sound()  # each output has its own volume
+
+    def poll_sound(self):
+        """Follow volume keys and other apps while the menu is open, but never fight a drag."""
+        if GLib.get_monotonic_time() - self.vol_touched > 1_500_000:
+            self.read_sound()
+        return True
+
+    # ---- network -------------------------------------------------------
+
+    def network_section(self):
+        self.net_glyph = glyph("wired", "section-glyph")
+        self.net_state = label("", xalign=1)
+        self.poll_network()
+        return hbox(self.net_glyph, label("NETWORK", "section", hexpand=True), self.net_state,
+                    spacing=6, cls="part")
+
+    def poll_network(self):
+        kind, text = network()
+        self.net_glyph.set_label(GLYPH[kind])
+        self.net_state.set_label(text)
+        for c in ("net-up", "net-down"):
+            self.net_state.remove_css_class(c)
+        self.net_state.add_css_class("net-down" if kind == "down" else "net-up")
+        return True
+
+    # ---- power ---------------------------------------------------------
+
+    def power_section(self):
+        self.power_hint = label("", "hint", xalign=1)
+        row = Gtk.Box(spacing=4, homogeneous=True)
+        row.add_css_class("power")
+        for icon, name, verb, cmd, confirm in POWER:
+            btn = Gtk.Button()
+            btn.set_child(vbox(label(icon, "glyph", xalign=0.5), label(name, "name", xalign=0.5), spacing=3))
+            btn.set_tooltip_text(verb + (" (click twice)" if confirm else ""))
+            if confirm:
+                btn.add_css_class("danger")
+            btn.connect("clicked", self.on_power, verb, cmd, confirm)
+            row.append(btn)
+        return vbox(section_head("power", "POWER", self.power_hint), row, spacing=10, cls="part")
+
+    def on_power(self, btn, verb, cmd, confirm):
+        if confirm and (self.armed is None or self.armed[0] is not btn):
+            self.disarm()
+            btn.add_css_class("armed")
+            self.power_hint.set_label(f"AGAIN TO {verb.upper()}")
+            self.armed = (btn, GLib.timeout_add_seconds(CONFIRM_SECS, self.disarm))
+            return
+        self.disarm()
+        self.close()  # get out of the way first (lock screen, shutdown screen)
+        subprocess.Popen(["sh", "-c", cmd], start_new_session=True)
+
+    def disarm(self):
+        if self.armed:
+            btn, timer = self.armed
+            self.armed = None
+            GLib.source_remove(timer)
+            btn.remove_css_class("armed")
+            self.power_hint.set_label("")
+        return False
+
+    # ---- night mode logic ----------------------------------------------
+
+    def refresh(self):
+        t, b = int(self.temp.get_value()), int(self.bright.get_value())
+        self.temp_val.set_label(f"{t}K")
+        self.bright_val.set_label(f"{b}%")
+        if self.is_on:
+            self.lit = tuple(c * b / 100 for c in kelvin(t))
+            self.night.remove_css_class("resting")
+        else:
+            self.lit = None  # all windows dark
+            self.night.add_css_class("resting")
+        self.preview.queue_draw()
+        for btn, pt, pb in self.preset_btns:
+            (btn.add_css_class if self.is_on and (pt, pb) == (t, b) else btn.remove_css_class)("active")
+
+    def on_slide(self, _scale):
+        if not self.quiet:
+            self.stop_anim()
+            if not self.is_on:
+                self.set_switch(True)
+            self.temp_v, self.bright_v = int(self.temp.get_value()), int(self.bright.get_value())
+            self.live.push(self.temp_v, self.bright_v)
+            self.schedule_save()
+        self.refresh()
+
+    def on_switch(self, sw, _p):
+        if self.quiet:
+            return
+        self.is_on = sw.get_active()
+        if self.is_on:  # fade in from neutral
+            self.fade(NEUTRAL, (self.temp_v, self.bright_v), move_sliders=False, done=self.save_now)
+        else:           # fade out, then let nightmode drop the shader
+            self.fade((self.temp_v, self.bright_v), NEUTRAL, move_sliders=False,
+                      done=lambda: subprocess.Popen([TOOL, "off"]))
+        self.refresh()
+
+    def set_switch(self, on):
+        self.quiet = True
+        self.switch.set_active(on)
+        self.quiet = False
+        self.is_on = on
+
+    def go_to(self, t, b):
+        if not self.is_on:
+            self.set_switch(True)
+        self.fade((self.temp_v, self.bright_v), (t, b), move_sliders=True, done=self.save_now)
+        self.temp_v, self.bright_v = t, b
+
+    def fade(self, start, end, move_sliders, done):
+        """Ease the screen (and maybe the sliders) from start to end."""
+        self.stop_anim()
+        if self.save_timer:
+            GLib.source_remove(self.save_timer)
+            self.save_timer = None
+        t0 = GLib.get_monotonic_time()
+
+        def step():
+            p = min((GLib.get_monotonic_time() - t0) / 1000 / FADE_MS, 1)
+            e = 1 - (1 - p) ** 3  # ease out
+            t = round(start[0] + (end[0] - start[0]) * e)
+            b = round(start[1] + (end[1] - start[1]) * e)
+            self.live.push(t, b)
+            if move_sliders:
+                self.quiet = True
+                self.temp.set_value(t)
+                self.bright.set_value(b)
+                self.quiet = False
+            if p >= 1:
+                self.anim = None
+                done()
+                return False
+            return True
+
+        self.anim = GLib.timeout_add(16, step)
+
+    def stop_anim(self):
+        if self.anim:
+            GLib.source_remove(self.anim)
+            self.anim = None
+
+    def schedule_save(self):
+        if self.save_timer:
+            GLib.source_remove(self.save_timer)
+        self.save_timer = GLib.timeout_add(SAVE_AFTER_MS, self.save_now)
+
+    def save_now(self):
+        self.save_timer = None
+        if self.is_on:
+            subprocess.Popen([TOOL, "set", str(self.temp_v), str(self.bright_v)])
+        return False
+
+    def on_key(self, _c, key, *_):
+        if key == Gdk.KEY_Escape:
+            self.close()
+            return True
+        if key in (Gdk.KEY_p, Gdk.KEY_P):
+            self.save_shot()
+            return True
+        return False
+
+    # ---- closing on focus loss, but not under a screenshot --------------
+
+    def on_focus(self, *_):
+        if not self.is_active():
+            GLib.timeout_add(150, self.close_unless_shooting)
+
+    def close_unless_shooting(self):
+        """slurp takes the keyboard to pick a region; stay until it and grim are done."""
+        if self.is_active():
+            return False
+        if subprocess.run(["pgrep", "-x", "slurp|grim"], capture_output=True).returncode == 0:
+            return True  # look again shortly
+        self.close()
+        return False
+
+    def save_shot(self):
+        """Render the menu itself, not the screen: crisp at 2x, see-through around the walls."""
+        child = self.get_child()
+        w, h = child.get_width(), child.get_height()
+        snap = Gtk.Snapshot()
+        snap.scale(SHOT_SCALE, SHOT_SCALE)
+        Gtk.WidgetPaintable.new(child).snapshot(snap, w, h)
+        node = snap.to_node()
+        texture = self.get_renderer().render_texture(node, Graphene.Rect().init(0, 0, w * SHOT_SCALE, h * SHOT_SCALE))
+        os.makedirs(SHOT_DIR, exist_ok=True)
+        path = f"{SHOT_DIR}/castle-menu_{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}.png"
+        texture.save_to_png(path)
+        try:
+            with open(path, "rb") as f:
+                # wl-copy stays running to serve the clipboard, so cut it loose
+                subprocess.Popen(["wl-copy", "--type", "image/png"], stdin=f, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
+        self.clock.set_label("SAVED")
+        self.clock.add_css_class("hint")
+        GLib.timeout_add(1500, lambda: (self.clock.remove_css_class("hint"), self.tick(), False)[2])
+
+    def on_close(self, _w):
+        if self.anim:  # finish what was asked for before going away
+            self.stop_anim()
+            if self.is_on:
+                self.save_now()
+            else:
+                subprocess.Popen([TOOL, "off"])
+        elif self.save_timer:
+            GLib.source_remove(self.save_timer)
+            self.save_now()
+        return False
+
+
+def main():
+    app = Gtk.Application(application_id="land.deathcastle.menu")
+
+    def activate(app):
+        # GTK 4.16+ turns hinting off by default, which makes small text blurry
+        st = Gtk.Settings.get_default()
+        st.props.gtk_font_rendering = Gtk.FontRendering.MANUAL
+        st.props.gtk_xft_antialias = 1
+        st.props.gtk_xft_hinting = 1
+        st.props.gtk_xft_hintstyle = "hintslight"
+        st.props.gtk_hint_font_metrics = True
+        css = Gtk.CssProvider()
+        try:
+            palette = open(COLORS).read().split("* {")[0]  # just the @define-color lines
+        except OSError:
+            palette = ""
+        # warmth trough shows the real colours, day on the left, ember on the right
+        stops = ", ".join(css_rgb(kelvin(k)) for k in range(T_MAX, T_MIN - 1, -500))
+        warm = f".warm trough {{ background-image: linear-gradient(to right, {stops}); }}"
+        css.load_from_string(palette + CSS + warm)
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
+                                                  Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        Menu(app).present()
+
+    app.connect("activate", activate)
+    app.run(None)
+
+
+if __name__ == "__main__":
+    main()

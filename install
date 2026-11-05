@@ -90,7 +90,10 @@ if [ "$samples" = yes ]; then
             put "$src" "$HOME/.config/$dir/${src##*/}"
         done
     done
-    put "$repo/samples/local-bin/screenshot" "$HOME/.local/bin/screenshot"
+    for tool in screenshot nightmode castle-menu; do
+        put "$repo/samples/local-bin/$tool" "$HOME/.local/bin/$tool"
+    done
+    put "$repo/samples/local-share/nightmode/shader.frag.in" "$HOME/.local/share/nightmode/shader.frag.in"
 fi
 
 if [ "$dry" = yes ]; then
@@ -99,7 +102,7 @@ if [ "$dry" = yes ]; then
 fi
 
 chmod +x "$HOME/.config/deathcastle/apply"
-[ "$samples" = no ] || chmod +x "$HOME/.config/waybar/net" "$HOME/.local/bin/screenshot"
+[ "$samples" = no ] || chmod +x "$HOME/.local/bin/screenshot" "$HOME/.local/bin/nightmode" "$HOME/.local/bin/castle-menu"
 "$HOME/.config/deathcastle/apply"
 
 echo "DEATHCASTLE installed."

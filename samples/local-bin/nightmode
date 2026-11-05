@@ -1,0 +1,83 @@
+#!/bin/bash
+# Night mode: warm and dim every screen with a Hyprland screen shader.
+# (gammastep could not touch the gamma of these NVIDIA outputs, a shader works on all of them.)
+#
+#   nightmode menu           open/close the castle menu (Waybar click)
+#   nightmode toggle         on/off (Waybar right-click)
+#   nightmode on|off
+#   nightmode set TEMP [DIM] set Kelvin (1000-6500) and brightness % (20-100), turns it on
+#   nightmode warmer|cooler  -/+250K (Waybar scroll up/down)
+#   nightmode bar            Waybar module output
+#
+# State is plain files in ~/.local/state/nightmode: "on" exists while it is on,
+# "temp" and "bright" hold the numbers, "shader.frag" is what hyprland.lua loads
+# at login and on config reload.
+
+state="${XDG_STATE_HOME:-$HOME/.local/state}/nightmode"
+template="${XDG_DATA_HOME:-$HOME/.local/share}/nightmode/shader.frag.in"
+on_file="$state/on"
+default_temp=3400
+default_bright=85
+min_temp=1000
+max_temp=6500
+min_bright=20
+step=250
+bar_signal=9
+mkdir -p "$state"
+
+read_num() { local v; v=$(cat "$state/$1" 2>/dev/null); [[ $v =~ ^[0-9]+$ ]] && echo "$v" || echo "$2"; }
+temp=$(read_num temp $default_temp)
+bright=$(read_num bright $default_bright)
+
+clamp() { local v=$1; ((v < $2)) && v=$2; ((v > $3)) && v=$3; echo "$v"; }
+
+hypr_shader() { hyprctl eval "hl.config({ decoration = { screen_shader = \"$1\" } })" >/dev/null; }
+
+write_shader() { # fill the template shared with nightmode-menu
+    sed "s/@TEMP@/$temp/; s/@BRIGHT@/$bright/" "$template" > "$1"
+}
+
+apply() {
+    echo "$temp" > "$state/temp"
+    echo "$bright" > "$state/bright"
+    touch "$on_file"
+    write_shader "$state/shader.frag"
+    # Hyprland may skip a path it already has, so live changes flip between two copies.
+    local live="$state/live-a.frag"
+    [[ $(hyprctl getoption decoration:screen_shader) == *live-a* ]] && live="$state/live-b.frag"
+    cp "$state/shader.frag" "$live"
+    hypr_shader "$live"
+}
+
+# Setting an empty path makes Hyprland show a "no such file" error banner, so turn it
+# off with a config reload instead: hyprland.lua sees no "on" file and loads no shader.
+off() { rm -f "$on_file"; hyprctl reload >/dev/null; }
+
+refresh_bar() { pkill -RTMIN+$bar_signal -x waybar; }
+
+case "$1" in
+    on)     apply ;;
+    off)    off ;;
+    toggle) if [[ -e $on_file ]]; then off; else apply; fi ;;
+    set)
+        [[ $2 =~ ^[0-9]+$ ]] && temp=$(clamp "$2" $min_temp $max_temp)
+        [[ $3 =~ ^[0-9]+$ ]] && bright=$(clamp "$3" $min_bright 100)
+        apply ;;
+    warmer|cooler)
+        [[ $1 == warmer ]] && temp=$((temp - step)) || temp=$((temp + step))
+        temp=$(clamp "$temp" $min_temp $max_temp)
+        apply ;;
+    menu)
+        pkill -f 'python[0-9.]* [^ ]*/castle-menu$' || setsid -f "$HOME/.local/bin/castle-menu" >/dev/null 2>&1
+        exit 0 ;;
+    bar) # just a tower, amber when on, grey when off; numbers are in the tooltip
+        icon="<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'></span>"
+        if [[ -e $on_file ]]; then
+            printf '{"text":"%s","class":"on","tooltip":"Night mode on, %sK %s%%\\nclick: castle menu, right-click: off, scroll: warmer/cooler"}\n' "$icon" "$temp" "$bright"
+        else
+            printf '{"text":"%s","class":"off","tooltip":"Night mode off\\nclick: castle menu, right-click: on, scroll: warmer/cooler"}\n' "$icon"
+        fi
+        exit 0 ;;
+    *) sed -n '2,11p' "$0"; exit 1 ;;
+esac
+refresh_bar

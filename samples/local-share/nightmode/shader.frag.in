@@ -1,0 +1,26 @@
+#version 300 es
+// Night mode screen shader template. nightmode and nightmode-menu fill in
+// @TEMP@ (Kelvin) and @BRIGHT@ (percent) and hand the result to Hyprland.
+precision highp float;
+in vec2 v_texcoord;
+uniform sampler2D tex;
+out vec4 fragColor;
+
+const float TEMP   = @TEMP@.0;
+const float BRIGHT = @BRIGHT@.0 / 100.0;
+
+// Kelvin to RGB, Tanner Helland's fit of the blackbody curve
+vec3 kelvin(float k) {
+    float t = k / 100.0;
+    vec3 c;
+    c.r = t <= 66.0 ? 255.0 : 329.698727446 * pow(t - 60.0, -0.1332047592);
+    c.g = t <= 66.0 ? 99.4708025861 * log(t) - 161.1195681661
+                    : 288.1221695283 * pow(t - 60.0, -0.0755148492);
+    c.b = t >= 66.0 ? 255.0 : (t <= 19.0 ? 0.0 : 138.5177312231 * log(t - 10.0) - 305.0447927307);
+    return clamp(c / 255.0, 0.0, 1.0);
+}
+
+void main() {
+    vec4 px = texture(tex, v_texcoord);
+    fragColor = vec4(px.rgb * kelvin(TEMP) * BRIGHT, px.a);
+}

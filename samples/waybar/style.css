@@ -58,14 +58,16 @@ tooltip label {
 }
 
 #cpu,
-#memory,
-#custom-net,
-#pulseaudio {
+#memory {
     padding: 0 14px;
     color: @fg;
 }
 
-#pulseaudio.muted,
-#custom-net.down {
+#custom-night {
+    padding: 0 14px;
+    color: @muted;
+}
+
+#custom-night.on {
     color: @amber;
 }

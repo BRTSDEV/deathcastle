@@ -43,6 +43,28 @@ DEATHCASTLE turns a Hyprland desktop into one consistent environment. Every colo
   </tr>
 </table>
 
+## The castle menu
+
+<table>
+  <tr>
+    <td width="300" valign="top"><img src="assets/castle-menu.png" alt="The castle menu: battlements on top, a pixel castle under the moon, then night mode, sound, network and power" width="300"></td>
+    <td valign="top">
+
+Click the tower on the bar and the castle opens. One small menu holds the controls you reach for most, so the bar stays quiet.
+
+- **Night mode.** Warm and dim every screen with a Hyprland screen shader, so it works on any GPU and every monitor. Drag the warmth and brightness sliders or pick a preset: Ember, Torch, Lantern, Dusk. Changes show while you drag.
+- **A living sky.** The sun crosses the sky by day and the moon by night, and the castle windows glow in your current tint.
+- **Sound.** Volume, mute and a one-click switch between outputs, such as headset and monitor speakers.
+- **Network.** Wired speed or wifi name at a glance. Never your IP.
+- **Power.** Lock, sleep, log out, reboot and shut down. The last three ask for a second click and close your apps cleanly first.
+- **Screenshot itself.** Press <kbd>P</kbd> for a crisp 2x PNG with a transparent background, saved and copied to the clipboard.
+
+<sub>Comes with <code>./install --samples</code>. Right-click the tower to toggle night mode, scroll it to change the warmth.</sub>
+
+</td>
+  </tr>
+</table>
+
 ## Palette
 
 <img src="assets/palette.svg" alt="The eleven DEATHCASTLE colors, from bg #11161c to cyan #7fb5bf" width="100%">
@@ -78,7 +100,7 @@ To get the full look, add the sample configs:
 | Option | What it does |
 | --- | --- |
 | *(none)* | Installs the palette, the generator and the wallpaper, then themes your apps |
-| `--samples` | Also installs the sample Hyprland, Waybar, Kitty, Rofi and Neofetch configs |
+| `--samples` | Also installs the sample Hyprland, Waybar, Kitty, Rofi and Neofetch configs, and the castle menu |
 | `--dry-run` | Lists every file it would back up or install, and changes nothing |
 
 <details>
@@ -95,6 +117,8 @@ To get the full look, add the sample configs:
 **VS Code and Obsidian theming:** `python3`
 
 **Sample config extras:** `grim`, `slurp`, `wl-clipboard` for screenshots, `playerctl` for media, `wireplumber` for volume
+
+**Castle menu:** `python3` with PyGObject (GTK 4) and pycairo, `wireplumber` and `pactl` for sound, `hyprshutdown` for a clean log out, reboot and shut down (falls back to `loginctl` without it), `iw` to show the wifi name
 
 </details>
 
@@ -117,6 +141,7 @@ To get the full look, add the sample configs:
 | `Super + 1-0` | Switch workspace |
 | `Super + Shift + 1-0` | Move window to workspace |
 | `Super + Shift + P` | Screenshot a region |
+| Click the tower on the bar | Castle menu (<kbd>Esc</kbd> closes, <kbd>P</kbd> screenshots it) |
 | `Super + Alt + P` | Screenshot the full screen |
 
 </details>

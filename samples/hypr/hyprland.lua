@@ -417,3 +417,26 @@ hl.window_rule({
     move  = "20 monitor_h-120",
     float = true,
 })
+
+-- Night mode (~/.local/bin/nightmode): keep the warm shader across logins and config reloads
+do
+    local dir = os.getenv("HOME") .. "/.local/state/nightmode/"
+    local on = io.open(dir .. "on")
+    if on then
+        on:close()
+        hl.config({ decoration = { screen_shader = dir .. "shader.frag" } })
+    end
+end
+
+-- Castle menu (~/.local/bin/castle-menu): night mode, sound, network and power, opened from the bar
+hl.window_rule({
+    name  = "castle-menu",
+    match = { class = "^land\\.deathcastle\\.menu$" },
+
+    float       = true,
+    pin         = true,
+    move        = "cursor_x-150 cursor_y+16",
+    border_size = 0,      -- the menu draws its own walls
+    no_shadow   = true,
+    no_blur     = true,
+})
