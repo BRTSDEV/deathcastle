@@ -1,0 +1,10 @@
+// Rofi app launcher. Colours are generated from ~/.config/deathcastle/palette
+configuration {
+    modi: "drun,run";
+    show-icons: false;
+    drun-display-format: "{name}";
+    display-drun: "[APPS]";
+    display-run: "[RUN]";
+}
+
+@theme "deathcastle"

@@ -1,0 +1,32 @@
+# DEATHCASTLE palette. Edit here, then run: ~/.config/deathcastle/apply
+# Sampled from the wallpaper, brightened where text needs it.
+
+# Base
+bg=11161c         # night shadows
+surface=232a31    # tower and hills
+muted=7e929d      # moon edge, secondary text
+fg=d5dee6         # moonlight, main text
+
+# Accents
+accent=a9c1cf     # the moon, the main accent
+amber=e0b060      # castle windows, attention only
+
+# Terminal and code colours
+red=c96f6f
+green=8fb08c
+blue=7fa6c9
+magenta=a993bd
+cyan=7fb5bf
+
+# Font, used everywhere
+font="JetBrains Mono"
+
+# Mouse pointer
+cursor="phinger-cursors-light"
+cursor_size=24
+
+# LibreWolf options. Both lower its default privacy, so read this before changing them.
+# keep_cookies: stay logged in to sites after closing the browser.
+# dark_sites: let sites see dark mode. Turns off resistFingerprinting for a milder protection.
+librewolf_keep_cookies=no
+librewolf_dark_sites=no

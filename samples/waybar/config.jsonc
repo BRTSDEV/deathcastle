@@ -1,0 +1,55 @@
+// DEATHCASTLE bar: floating, spaced out, icons in brackets. Add "output": "DP-1" to pin it to one monitor.
+{
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "margin-top": 6,
+    "margin-left": 12,
+    "margin-right": 12,
+    "spacing": 0,
+    "modules-left": ["hyprland/workspaces"],
+    "modules-center": ["clock#date", "clock#time"],
+    "modules-right": ["custom/song", "cpu", "memory", "custom/net", "pulseaudio"],
+
+    "hyprland/workspaces": {
+        "format": "[{name}]",
+        "all-outputs": true
+    },
+    "custom/song": {
+        "exec": "playerctl --follow metadata --format '{{artist}} - {{title}}' 2>/dev/null",
+        "format": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰝚</span> {}]",
+        "escape": true,
+        "max-length": 60
+    },
+    "cpu": {
+        "format": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰍛</span> {usage}%]",
+        "interval": 5
+    },
+    "memory": {
+        "format": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰘚</span> {percentage}%]",
+        "interval": 5,
+        "tooltip-format": "{used:0.1f} / {total:0.1f} GiB"
+    },
+    "custom/net": {
+        "exec": "$HOME/.config/waybar/net",
+        "return-type": "json",
+        "interval": 10
+    },
+    "pulseaudio": {
+        "format": "[{icon} {volume}%]",
+        "format-muted": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰖁</span> MUTED]",
+        "format-icons": { "default": ["<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰕿</span>", "<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰖀</span>", "<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰕾</span>"] },
+        "scroll-step": 5,
+        "on-click": "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+        "tooltip-format": "{desc}"
+    },
+    "clock#date": {
+        "format": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰃭</span> {:%a %d %b}]",
+        "tooltip-format": "<tt>{calendar}</tt>",
+        "calendar": { "format": { "today": "<b><u>{}</u></b>" } }
+    },
+    "clock#time": {
+        "format": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰅐</span> {:%H:%M}]",
+        "tooltip": false
+    }
+}

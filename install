@@ -1,0 +1,107 @@
+#!/bin/sh
+# Install DEATHCASTLE. Saves a copy of every file it would replace before touching it.
+# Usage: ./install [--samples] [--dry-run]
+set -eu
+
+samples=no
+dry=no
+for arg in "$@"; do
+    case "$arg" in
+        --samples) samples=yes ;;
+        --dry-run) dry=yes ;;
+        *) echo "usage: ./install [--samples] [--dry-run]" >&2; exit 2 ;;
+    esac
+done
+if [ "$(id -u)" = 0 ]; then
+    echo "install: run this as your normal user, not root" >&2
+    exit 1
+fi
+
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+backup="$HOME/.local/state/deathcastle/backup-$(date +%Y%m%d-%H%M%S)"
+saved=0
+
+save() { # copy an existing file into the backup folder
+    [ -e "$1" ] || return 0
+    case "$1" in
+        "$HOME"/*) rel=${1#"$HOME"/} ;;
+        *) rel=outside-home/${1#/} ;;
+    esac
+    saved=$((saved + 1))
+    if [ "$dry" = yes ]; then
+        echo "would back up: $1"
+    else
+        mkdir -p "$(dirname -- "$backup/$rel")"
+        cp -p -- "$1" "$backup/$rel"
+    fi
+}
+put() { # source destination
+    save "$2"
+    if [ "$dry" = yes ]; then
+        echo "would install: $2"
+    else
+        mkdir -p "$(dirname -- "$2")"
+        cp -- "$1" "$2"
+    fi
+}
+
+# Files the generator replaces or edits
+for file in \
+    .config/kitty/deathcastle.conf .config/hypr/deathcastle.lua .config/hypr/hyprtoolkit.conf \
+    .config/hypr/hyprlock-colors.conf .config/waybar/colors.css .config/mako/config \
+    .config/gtk-3.0/settings.ini .config/gtk-3.0/gtk.css .config/gtk-4.0/settings.ini .config/gtk-4.0/gtk.css \
+    .config/rofi/deathcastle.rasi .config/qt6ct/qt6ct.conf .config/qt6ct/colors/deathcastle.conf \
+    .config/qt6ct/qss/deathcastle.qss .config/kdeglobals .local/share/color-schemes/DEATHCASTLE.colors \
+    .config/Code/User/settings.json .icons/default/index.theme; do
+    save "$HOME/$file"
+done
+
+lw="$HOME/.config/librewolf/librewolf"
+lw_profile=$(sed -n 's/^Default=//p' "$lw/installs.ini" 2>/dev/null | head -n 1) || lw_profile=
+if [ -n "$lw_profile" ]; then
+    save "$lw/$lw_profile/user.js"
+    save "$lw/$lw_profile/chrome/userChrome.css"
+    save "$lw/$lw_profile/chrome/userContent.css"
+fi
+
+if [ -f "$HOME/.config/obsidian/obsidian.json" ]; then
+    vaults=$(python3 -I -c 'import json, os; [print(v["path"]) for v in json.load(open(os.path.expanduser("~/.config/obsidian/obsidian.json"))).get("vaults", {}).values()]')
+    while IFS= read -r vault; do
+        [ -n "$vault" ] && save "$vault/.obsidian/appearance.json"
+    done <<VAULTS
+$vaults
+VAULTS
+fi
+
+# The theme itself. A palette you already edited is kept.
+put "$repo/apply" "$HOME/.config/deathcastle/apply"
+if [ -e "$HOME/.config/deathcastle/palette" ]; then
+    echo "keeping your existing palette: $HOME/.config/deathcastle/palette"
+else
+    put "$repo/palette" "$HOME/.config/deathcastle/palette"
+fi
+put "$repo/wallpaper.jpg" "$HOME/.config/hypr/wallpaper.jpg"
+
+# Sample configs, only when asked for
+if [ "$samples" = yes ]; then
+    for dir in hypr waybar kitty rofi neofetch; do
+        for src in "$repo/samples/$dir"/*; do
+            put "$src" "$HOME/.config/$dir/${src##*/}"
+        done
+    done
+    put "$repo/samples/local-bin/screenshot" "$HOME/.local/bin/screenshot"
+fi
+
+if [ "$dry" = yes ]; then
+    echo "dry run: nothing was changed"
+    exit 0
+fi
+
+chmod +x "$HOME/.config/deathcastle/apply"
+[ "$samples" = no ] || chmod +x "$HOME/.config/waybar/net" "$HOME/.local/bin/screenshot"
+"$HOME/.config/deathcastle/apply"
+
+echo "DEATHCASTLE installed."
+if [ "$saved" -gt 0 ]; then
+    echo "Your previous files ($saved) are in: $backup"
+fi

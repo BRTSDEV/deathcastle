@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 186" width="1280" height="186" role="img" aria-label="The DEATHCASTLE palette: bg #11161c, surface #232a31, muted #7e929d, fg #d5dee6, accent #a9c1cf, amber #e0b060, red #c96f6f, green #8fb08c, blue #7fa6c9, magenta #a993bd, cyan #7fb5bf">
+  <title>DEATHCASTLE palette</title>
+  <style>
+    .swatch { animation: rise .8s cubic-bezier(.2,.7,.2,1) both; }
+    .name { font: 700 15px 'JetBrains Mono','DejaVu Sans Mono','Menlo','Consolas',monospace; fill: #d5dee6; }
+    .hex { font: 500 13px 'JetBrains Mono','DejaVu Sans Mono','Menlo','Consolas',monospace; fill: #7e929d; }
+    @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  </style>
+  <rect width="1280" height="186" fill="#11161c"/>
+  <g class="swatch" style="animation-delay:0.00s"><rect x="24.0" y="24" width="104.7" height="92" fill="#11161c" stroke="#7e929d" stroke-width="1"/><text class="name" x="76.4" y="142" text-anchor="middle">bg</text><text class="hex" x="76.4" y="163" text-anchor="middle">#11161c</text></g>
+  <g class="swatch" style="animation-delay:0.07s"><rect x="136.7" y="24" width="104.7" height="92" fill="#232a31"/><text class="name" x="189.1" y="142" text-anchor="middle">surface</text><text class="hex" x="189.1" y="163" text-anchor="middle">#232a31</text></g>
+  <g class="swatch" style="animation-delay:0.14s"><rect x="249.5" y="24" width="104.7" height="92" fill="#7e929d"/><text class="name" x="301.8" y="142" text-anchor="middle">muted</text><text class="hex" x="301.8" y="163" text-anchor="middle">#7e929d</text></g>
+  <g class="swatch" style="animation-delay:0.21s"><rect x="362.2" y="24" width="104.7" height="92" fill="#d5dee6"/><text class="name" x="414.5" y="142" text-anchor="middle">fg</text><text class="hex" x="414.5" y="163" text-anchor="middle">#d5dee6</text></g>
+  <g class="swatch" style="animation-delay:0.28s"><rect x="474.9" y="24" width="104.7" height="92" fill="#a9c1cf"/><text class="name" x="527.3" y="142" text-anchor="middle">accent</text><text class="hex" x="527.3" y="163" text-anchor="middle">#a9c1cf</text></g>
+  <g class="swatch" style="animation-delay:0.35s"><rect x="587.6" y="24" width="104.7" height="92" fill="#e0b060"/><text class="name" x="640.0" y="142" text-anchor="middle">amber</text><text class="hex" x="640.0" y="163" text-anchor="middle">#e0b060</text></g>
+  <g class="swatch" style="animation-delay:0.42s"><rect x="700.4" y="24" width="104.7" height="92" fill="#c96f6f"/><text class="name" x="752.7" y="142" text-anchor="middle">red</text><text class="hex" x="752.7" y="163" text-anchor="middle">#c96f6f</text></g>
+  <g class="swatch" style="animation-delay:0.49s"><rect x="813.1" y="24" width="104.7" height="92" fill="#8fb08c"/><text class="name" x="865.5" y="142" text-anchor="middle">green</text><text class="hex" x="865.5" y="163" text-anchor="middle">#8fb08c</text></g>
+  <g class="swatch" style="animation-delay:0.56s"><rect x="925.8" y="24" width="104.7" height="92" fill="#7fa6c9"/><text class="name" x="978.2" y="142" text-anchor="middle">blue</text><text class="hex" x="978.2" y="163" text-anchor="middle">#7fa6c9</text></g>
+  <g class="swatch" style="animation-delay:0.63s"><rect x="1038.5" y="24" width="104.7" height="92" fill="#a993bd"/><text class="name" x="1090.9" y="142" text-anchor="middle">magenta</text><text class="hex" x="1090.9" y="163" text-anchor="middle">#a993bd</text></g>
+  <g class="swatch" style="animation-delay:0.70s"><rect x="1151.3" y="24" width="104.7" height="92" fill="#7fb5bf"/><text class="name" x="1203.6" y="142" text-anchor="middle">cyan</text><text class="hex" x="1203.6" y="163" text-anchor="middle">#7fb5bf</text></g>
+</svg>

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Waybar network status: never shows the IP.
+dev=$(ip -4 route show default | awk '{print $5; exit}')
+if [ -z "$dev" ]; then
+    cat <<DOWN
+{"text": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰌘</span> DOWN]", "class": "down"}
+DOWN
+    exit 0
+fi
+cat <<UP
+{"text": "[<span font_family='Symbols Nerd Font Mono' weight='normal' size='11pt'>󰖟</span> UP]", "tooltip": "$dev"}
+UP
