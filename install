@@ -52,7 +52,8 @@ for file in \
     .config/gtk-3.0/settings.ini .config/gtk-3.0/gtk.css .config/gtk-4.0/settings.ini .config/gtk-4.0/gtk.css \
     .config/rofi/deathcastle.rasi .config/qt6ct/qt6ct.conf .config/qt6ct/colors/deathcastle.conf \
     .config/qt6ct/qss/deathcastle.qss .config/kdeglobals .local/share/color-schemes/DEATHCASTLE.colors \
-    .config/Code/User/settings.json .icons/default/index.theme; do
+    .config/Code/User/settings.json .icons/default/index.theme \
+    .config/btop/btop.conf .config/btop/themes/deathcastle.theme; do
     save "$HOME/$file"
 done
 

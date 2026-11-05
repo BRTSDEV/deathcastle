@@ -18,7 +18,7 @@
 DEATHCASTLE turns a Hyprland desktop into one consistent environment. Every color comes from a single plain-text palette, sampled from a moonlit castle wallpaper. Change a value, run one command, and every app follows.
 
 <div align="center">
-  <img src="wallpaper.jpg" alt="The DEATHCASTLE wallpaper: a castle on a hill in front of a huge moon" width="100%">
+  <img src="assets/screenshot.png" alt="The DEATHCASTLE desktop: a castle on a hill in front of a huge moon, with a slim bracket-style bar on top" width="100%">
 </div>
 
 ## Features
@@ -30,6 +30,19 @@ DEATHCASTLE turns a Hyprland desktop into one consistent environment. Every colo
 - **Safe to try.** Preview every change first, and get an automatic backup of anything replaced.
 - **Plain and hackable.** Shell scripts and text files, with nothing hidden and no background services.
 
+## Gallery
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/chamber.png" alt="btop, neofetch and VS Code tiled in DEATHCASTLE colors"></td>
+    <td width="50%"><img src="assets/launcher.png" alt="The Rofi app launcher open over the castle wallpaper"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>The chamber</b><br><sub>btop, Neofetch and VS Code</sub></td>
+    <td align="center"><b>The launcher</b><br><sub>Rofi over frosted glass</sub></td>
+  </tr>
+</table>
+
 ## Palette
 
 <img src="assets/palette.svg" alt="The eleven DEATHCASTLE colors, from bg #11161c to cyan #7fb5bf" width="100%">
@@ -39,7 +52,7 @@ DEATHCASTLE turns a Hyprland desktop into one consistent environment. Every colo
 | Area | Apps |
 | --- | --- |
 | **Desktop** | Hyprland, Waybar, Rofi, Mako, Hyprlock |
-| **Terminal** | Kitty, Neofetch |
+| **Terminal** | Kitty, Neofetch, btop |
 | **Toolkits** | GTK 3, GTK 4, Qt 6 through qt6ct, KDE color scheme for Dolphin |
 | **Apps** | LibreWolf, Obsidian, Visual Studio Code |
 | **Details** | Font, mouse pointer and wallpaper |
